@@ -41,6 +41,10 @@ Thumbs.db
 /flutter/direct_drawing_generator/android/.gradle/
 /flutter/direct_drawing_generator/android/app/build/
 
+# キーストアファイル（プロジェクトルート）
+*.keystore
+*.keystore.b64
+
 # iOS固有
 /flutter/direct_drawing_generator/ios/Pods/
 /flutter/direct_drawing_generator/ios/.symlinks/
