@@ -1,0 +1,52 @@
+name: direct_drawing_generator
+description: Direct Drawing Generator Flutter application inspired by the K-OS-ERI design.
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_colorpicker: ^1.0.3
+  provider: ^6.1.2
+  path_provider: ^2.1.2
+  file_picker: ^6.1.1
+  share_plus: ^7.2.1
+  collection: ^1.18.0
+  http: ^1.2.0
+  http_parser: ^4.0.2
+  desktop_webview_window: ^0.2.3
+  shared_preferences: ^2.2.2
+  media_kit: 1.1.8
+  media_kit_video: 1.1.8
+  media_kit_libs_windows_video: ^1.0.11
+  video_player: ^2.8.1
+  video_thumbnail: ^0.5.3
+  image: ^4.1.7
+  uuid: ^4.5.0
+  webview_flutter: ^4.7.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  msix: ^3.16.7
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/reference/
+    - assets/icons/
+
+msix_config:
+  display_name: Direct Drawing Generator
+  publisher_display_name: K-OS-ERI Development
+  identity_name: io.koseri.direct-drawing-generator
+  msix_version: 1.0.0.0
+  architecture: x64
+  capabilities: internetClient, picturesLibrary, videosLibrary, documentsLibrary
+  certificate_path: ci/test-certificate.pfx
+  certificate_password: test123
+  logo_path: assets/icons/app_icon.png

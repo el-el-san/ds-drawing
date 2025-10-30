@@ -1,0 +1,183 @@
+name: Flutter Windows x64 CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'flutter/direct_drawing_generator/**'
+      - '.github/workflows/flutter-windows-x64.yml'
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: flutter/direct_drawing_generator
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.16.0
+        with:
+          channel: stable
+          flutter-version: '3.22.2'
+          cache: true
+
+      - name: Ensure Windows platform scaffolding
+        run: flutter create --org io.koseri --platforms windows --no-pub .
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Flutter analyze
+        run: flutter analyze
+
+      - name: Run widget tests
+        run: flutter test
+
+      - name: Generate version info
+        id: version
+        shell: pwsh
+        run: |
+          $RUN_ATTEMPT = "${{ github.run_attempt }}"
+          $BUILD_BASE = (git rev-list --count HEAD)
+          $BUILD_NUMBER = [int]$BUILD_BASE * 10 + [int]$RUN_ATTEMPT
+          $VERSION_STAMP = (Get-Date -Format "yyyyMMdd")
+          $VERSION_NAME = "0.${VERSION_STAMP}.${BUILD_BASE}"
+
+          "build_number=$BUILD_NUMBER" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "version_name=$VERSION_NAME" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          @"
+          Resolved version components
+            Commit count (base): $BUILD_BASE
+            Run attempt: $RUN_ATTEMPT
+            Build number: $BUILD_NUMBER
+            Version name: $VERSION_NAME
+          "@ | Tee-Object -FilePath version-info.txt
+
+      - name: Update pubspec.yaml with version
+        shell: pwsh
+        run: |
+          $VERSION = "${{ steps.version.outputs.version_name }}+${{ steps.version.outputs.build_number }}"
+          Write-Host "Updating pubspec.yaml version to: $VERSION"
+          (Get-Content pubspec.yaml) -replace '^version: .*', "version: $VERSION" | Set-Content pubspec.yaml
+          Write-Host "Updated pubspec.yaml:"
+          Select-String -Path pubspec.yaml -Pattern '^version:'
+
+      - name: Update MSIX version and architecture
+        shell: pwsh
+        run: |
+          $BUILD_NUMBER = "${{ steps.version.outputs.build_number }}"
+          $MAJOR = [Math]::Floor([int]$BUILD_NUMBER / 65536) % 65536
+          $MINOR = [Math]::Floor([int]$BUILD_NUMBER / 256) % 256
+          $BUILD = [int]$BUILD_NUMBER % 256
+          $MSIX_VERSION = "${MAJOR}.${MINOR}.${BUILD}.0"
+          Write-Host "Updating MSIX version to: $MSIX_VERSION"
+
+          $content = Get-Content pubspec.yaml
+          $content = $content -replace 'msix_version: .*', "msix_version: $MSIX_VERSION"
+          $content = $content -replace 'architecture: arm64', 'architecture: x64'
+          $content | Set-Content pubspec.yaml
+
+      - name: Create test certificate for MSIX signing
+        shell: pwsh
+        run: |
+          $certPath = "ci/test-certificate.pfx"
+          $certDir = Split-Path $certPath -Parent
+          if (!(Test-Path $certDir)) {
+            New-Item -ItemType Directory -Path $certDir -Force
+          }
+
+          # Create self-signed certificate for testing
+          $cert = New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject "CN=K-OS-ERI Development, O=K-OS-ERI, C=US" `
+            -KeyUsage DigitalSignature `
+            -FriendlyName "Direct Drawing Generator Test Certificate" `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+
+          $certPassword = ConvertTo-SecureString -String "test123" -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath $certPath -Password $certPassword
+          Write-Host "Test certificate created at: $certPath"
+
+      - name: Validate dart-define values
+        shell: pwsh
+        run: |
+          $UPLOAD_ENDPOINT = "${{ secrets.UPLOAD_ENDPOINT }}"
+          $UPLOAD_AUTH_ENDPOINT = "${{ secrets.UPLOAD_AUTH_ENDPOINT }}"
+          $UPLOAD_TURNSTILE_URL = "${{ secrets.UPLOAD_TURNSTILE_URL }}"
+
+          Write-Host "Validating dart-define values..."
+          if ([string]::IsNullOrWhiteSpace($UPLOAD_ENDPOINT)) {
+            Write-Error "UPLOAD_ENDPOINT is empty or not set"
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($UPLOAD_AUTH_ENDPOINT)) {
+            Write-Error "UPLOAD_AUTH_ENDPOINT is empty or not set"
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($UPLOAD_TURNSTILE_URL)) {
+            Write-Error "UPLOAD_TURNSTILE_URL is empty or not set"
+            exit 1
+          }
+
+          Write-Host "✓ UPLOAD_ENDPOINT is set (length: $($UPLOAD_ENDPOINT.Length))"
+          Write-Host "✓ UPLOAD_AUTH_ENDPOINT is set (length: $($UPLOAD_AUTH_ENDPOINT.Length))"
+          Write-Host "✓ UPLOAD_TURNSTILE_URL is set (length: $($UPLOAD_TURNSTILE_URL.Length))"
+
+      - name: Build Windows executable (release)
+        shell: pwsh
+        run: |
+          flutter build windows --release `
+            --build-number=${{ steps.version.outputs.build_number }} `
+            --build-name=${{ steps.version.outputs.version_name }} `
+            --dart-define="UPLOAD_ENDPOINT=${{ secrets.UPLOAD_ENDPOINT }}" `
+            --dart-define="UPLOAD_AUTH_ENDPOINT=${{ secrets.UPLOAD_AUTH_ENDPOINT }}" `
+            --dart-define="UPLOAD_TURNSTILE_URL=${{ secrets.UPLOAD_TURNSTILE_URL }}"
+
+      - name: Create MSIX package
+        shell: pwsh
+        run: |
+          dart run msix:create `
+            --install-certificate false `
+            --windows-build-args "--dart-define=UPLOAD_ENDPOINT=${{ secrets.UPLOAD_ENDPOINT }} --dart-define=UPLOAD_AUTH_ENDPOINT=${{ secrets.UPLOAD_AUTH_ENDPOINT }} --dart-define=UPLOAD_TURNSTILE_URL=${{ secrets.UPLOAD_TURNSTILE_URL }}"
+
+      - name: Rename MSIX and cleanup
+        shell: pwsh
+        run: |
+          $msixFiles = Get-ChildItem -Path . -Filter "*.msix" -Recurse
+          if ($msixFiles.Count -gt 0) {
+            $msixPath = $msixFiles[0].FullName
+            $newName = "direct-drawing-generator-windows-x64-${{ steps.version.outputs.version_name }}+${{ steps.version.outputs.build_number }}.msix"
+            $newPath = Join-Path (Split-Path $msixPath -Parent) $newName
+            Move-Item -Path $msixPath -Destination $newPath -Force
+            Write-Host "Created: $newName"
+            Get-Item $newPath | Format-List
+          } else {
+            Write-Error "MSIX file not found"
+            exit 1
+          }
+
+      - name: Inspect build outputs
+        shell: pwsh
+        run: |
+          Write-Host "Final MSIX files:"
+          Get-ChildItem -Path . -Filter "*.msix" -Recurse | Format-Table Name, Length, FullName
+
+      - name: Upload MSIX artifact
+        if: success()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: direct-drawing-msix-windows-x64-${{ steps.version.outputs.version_name }}-build${{ steps.version.outputs.build_number }}
+          path: |
+            flutter/direct_drawing_generator/build/windows/x64/runner/Release/*.msix
+            flutter/direct_drawing_generator/version-info.txt
+          if-no-files-found: error

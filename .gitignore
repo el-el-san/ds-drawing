@@ -1,0 +1,63 @@
+# --- General ---
+# OS生成ファイル
+.DS_Store
+Thumbs.db
+
+# エディタ設定
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ログファイル
+*.log
+
+# 一時ファイル
+*.tmp
+*.temp
+
+# --- Environment Variables ---
+# 重要: シークレットキーは絶対にコミットしない
+/.env
+/*.env
+.env.*
+!/.env.sample
+
+# --- Flutter Project ---
+# Flutter関連の生成ファイル
+/flutter/direct_drawing_generator/.dart_tool/
+/flutter/direct_drawing_generator/.flutter-plugins
+/flutter/direct_drawing_generator/.flutter-plugins-dependencies
+/flutter/direct_drawing_generator/.packages
+/flutter/direct_drawing_generator/build/
+/flutter/direct_drawing_generator/.metadata
+/flutter/direct_drawing_generator/pubspec.lock
+
+# Android固有
+/flutter/direct_drawing_generator/android/key.properties
+/flutter/direct_drawing_generator/android/app/*.keystore
+/flutter/direct_drawing_generator/android/local.properties
+/flutter/direct_drawing_generator/android/.gradle/
+/flutter/direct_drawing_generator/android/app/build/
+
+# iOS固有
+/flutter/direct_drawing_generator/ios/Pods/
+/flutter/direct_drawing_generator/ios/.symlinks/
+/flutter/direct_drawing_generator/ios/Flutter/Flutter.framework
+/flutter/direct_drawing_generator/ios/Flutter/Flutter.podspec
+
+# Windows固有
+/flutter/direct_drawing_generator/windows/flutter/ephemeral/
+
+# Web固有
+/flutter/direct_drawing_generator/web/flutter_service_worker.js
+
+# --- Project Configuration ---
+# Claudeコーディングガイドライン（開発用のみ）
+CLAUDE.md
+AGENTS.md
+
+# GitHub Secrets設定ガイド（秘密情報を含むためローカルのみ）
+SECRETS.md
+

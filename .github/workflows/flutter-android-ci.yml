@@ -1,0 +1,230 @@
+name: Flutter Android CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'flutter/direct_drawing_generator/**'
+      - '.github/workflows/flutter-android-ci.yml'
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: flutter/direct_drawing_generator
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq wget unzip
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.16.0
+        with:
+          channel: stable
+          flutter-version: '3.22.2'
+          cache: true
+
+      - name: Fix Flutter directory permissions
+        working-directory: .
+        run: |
+          if [ -n "$FLUTTER_ROOT" ] && [ -d "$FLUTTER_ROOT" ]; then
+            git config --global --add safe.directory "$FLUTTER_ROOT"
+          fi
+
+      - name: Ensure Android platform scaffolding
+        run: flutter create --org io.koseri --platforms android --no-pub .
+
+      - name: Fix applicationId to ensure update compatibility
+        run: |
+          set -euo pipefail
+          GRADLE_FILE="android/app/build.gradle"
+          APP_ID="io.koseri.direct_drawing_generator"
+
+          echo "Ensuring applicationId is set to: $APP_ID"
+
+          # Replace applicationId line, handling both formats
+          if grep -q "applicationId" "$GRADLE_FILE"; then
+            # Replace existing applicationId
+            sed -i "s/applicationId[[:space:]]*[=:][[:space:]]*[\"'].*[\"']/applicationId = \"$APP_ID\"/" "$GRADLE_FILE"
+          else
+            # Add applicationId if not present (after namespace or in defaultConfig)
+            sed -i "/defaultConfig {/a \        applicationId = \"$APP_ID\"" "$GRADLE_FILE"
+          fi
+
+          echo "Verification - applicationId in build.gradle:"
+          grep -A2 -B2 "applicationId" "$GRADLE_FILE" || echo "Warning: applicationId not found"
+
+      - name: Provision deterministic signing key
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ANDROID_KEYSTORE_B64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then
+            echo "::error::Android signing secrets are not configured" >&2
+            exit 1
+          fi
+
+          KEYSTORE_PATH="android/app/upload.keystore"
+          KEY_PROPS="android/key.properties"
+
+          mkdir -p "$(dirname "$KEYSTORE_PATH")"
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+
+          {
+            echo "storeFile=../app/upload.keystore"
+            echo "storePassword=${ANDROID_KEYSTORE_PASSWORD}"
+            echo "keyAlias=${ANDROID_KEY_ALIAS:-koseriReleaseV2}"
+            echo "keyPassword=${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+          } > "$KEY_PROPS"
+
+      - name: Ensure release build signs with deterministic key
+        run: ci/ensure-android-signing.sh
+
+      - name: Align Kotlin stdlib versions
+        run: |
+          cat <<'GRADLE' >> android/app/build.gradle
+          configurations.all {
+              resolutionStrategy.eachDependency { details ->
+                  if (details.requested.group == "org.jetbrains.kotlin") {
+                      details.useVersion "1.9.24"
+                  }
+              }
+          }
+          GRADLE
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Flutter analyze
+        run: flutter analyze
+
+      - name: Run widget tests
+        run: flutter test
+
+      - name: Generate version info
+        id: version
+        run: |
+          set -euo pipefail
+          RUN_ATTEMPT=${{ github.run_attempt }}
+          BUILD_BASE=$(git rev-list --count HEAD)
+          BUILD_NUMBER=$((BUILD_BASE * 10 + RUN_ATTEMPT))
+          VERSION_STAMP=$(date -u +%Y%m%d)
+          VERSION_NAME="0.${VERSION_STAMP}.${BUILD_BASE}"
+
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "Resolved version components"
+            echo "  Commit count (base): $BUILD_BASE"
+            echo "  Run attempt: $RUN_ATTEMPT"
+            echo "  Build number: $BUILD_NUMBER"
+            echo "  Version name: $VERSION_NAME"
+          } | tee version-info.txt
+
+      - name: Update pubspec.yaml with version
+        run: |
+          VERSION="${{ steps.version.outputs.version_name }}+${{ steps.version.outputs.build_number }}"
+          echo "Updating pubspec.yaml version to: $VERSION"
+          sed -i "s/^version: .*/version: $VERSION/" pubspec.yaml
+          echo "Updated pubspec.yaml:"
+          grep "^version:" pubspec.yaml
+
+      - name: Build Android APK (release)
+        env:
+          UPLOAD_ENDPOINT: ${{ secrets.UPLOAD_ENDPOINT }}
+          UPLOAD_AUTH_ENDPOINT: ${{ secrets.UPLOAD_AUTH_ENDPOINT }}
+          UPLOAD_TURNSTILE_URL: ${{ secrets.UPLOAD_TURNSTILE_URL }}
+        run: |
+          flutter build apk --release \
+            --build-number=${{ steps.version.outputs.build_number }} \
+            --build-name=${{ steps.version.outputs.version_name }} \
+            --dart-define=UPLOAD_ENDPOINT="${UPLOAD_ENDPOINT}" \
+            --dart-define=UPLOAD_AUTH_ENDPOINT="${UPLOAD_AUTH_ENDPOINT}" \
+            --dart-define=UPLOAD_TURNSTILE_URL="${UPLOAD_TURNSTILE_URL}"
+
+      - name: Rename APK and cleanup
+        run: |
+          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+          NEW_NAME="direct-drawing-generator-${{ steps.version.outputs.version_name }}+${{ steps.version.outputs.build_number }}.apk"
+
+          # Rename the main APK
+          if [ -f "$APK_PATH" ]; then
+            mv "$APK_PATH" "build/app/outputs/flutter-apk/$NEW_NAME"
+            echo "Created: $NEW_NAME"
+            ls -lh "build/app/outputs/flutter-apk/$NEW_NAME"
+          fi
+
+          # Remove duplicate APKs from other directories to avoid confusion
+          echo "Cleaning up duplicate APKs..."
+          rm -f build/app/outputs/apk/release/*.apk
+          echo "Cleanup complete"
+
+      - name: Verify APK signature fingerprint
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          APK=$(find build/app/outputs/flutter-apk -maxdepth 1 -type f -name 'direct-drawing-generator-*.apk' | head -n 1)
+          if [ -z "${APK:-}" ]; then
+            echo "::error::APK not found in build/app/outputs/flutter-apk" >&2
+            exit 1
+          fi
+
+          echo "Verifying signature for: $APK"
+          KEYSTORE_PATH="android/app/upload.keystore"
+          EXPECTED=$(keytool -list -v -storetype PKCS12 -keystore "$KEYSTORE_PATH" -storepass:env ANDROID_KEYSTORE_PASSWORD |
+            awk '/SHA256:/ {gsub(/\r/, ""); print $2; exit}')
+          if [ -z "${EXPECTED:-}" ]; then
+              echo "::error::Failed to derive expected fingerprint from keystore" >&2
+              exit 1
+          fi
+
+          echo "Expected SHA-256 fingerprint: $EXPECTED"
+          keytool -printcert -jarfile "$APK" | tee apk-signature.txt
+          if ! grep -F "$EXPECTED" apk-signature.txt >/dev/null; then
+            echo "::error::APK fingerprint mismatch" >&2
+            exit 1
+          fi
+
+          echo "Signature fingerprint verified"
+
+      - name: Inspect APK outputs
+        run: |
+          echo "Final APK files:"
+          find build/app/outputs -maxdepth 3 -type f -name '*.apk' -exec ls -lh {} \;
+
+      - name: Upload APK artifact
+        if: success()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: direct-drawing-apk-ci-${{ steps.version.outputs.version_name }}-build${{ steps.version.outputs.build_number }}
+          path: |
+            flutter/direct_drawing_generator/build/app/outputs/flutter-apk/direct-drawing-generator-*.apk
+            flutter/direct_drawing_generator/version-info.txt
+          if-no-files-found: error
