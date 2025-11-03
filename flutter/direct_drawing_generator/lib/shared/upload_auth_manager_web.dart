@@ -23,7 +23,7 @@ class UploadAuthException implements Exception {
   final String message;
 
   @override
-  String toString() => 'UploadAuthException: ' + message;
+  String toString() => 'UploadAuthException: $message';
 }
 
 class UploadAuthManager {
