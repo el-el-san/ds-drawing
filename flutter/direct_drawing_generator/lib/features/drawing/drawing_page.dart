@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:universal_io/io.dart';
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
@@ -20,6 +20,7 @@ import 'models/generation_state.dart';
 import 'services/mcp_health_checker.dart';
 import 'widgets/drawing_canvas.dart';
 import '../../shared/app_settings_controller.dart';
+import '../../shared/web/file_saver.dart' as web_file_saver;
 import '../story/story_controller.dart';
 
 class DrawingPage extends StatefulWidget {
@@ -957,6 +958,18 @@ class _DrawingPageState extends State<DrawingPage> {
       final Uint8List imageBytes = response.bodyBytes;
       final String fileName = 'ai_generated_${DateTime.now().millisecondsSinceEpoch}.png';
 
+      if (kIsWeb) {
+        final bool handled = await web_file_saver.triggerDownload(
+          fileName: fileName,
+          bytes: imageBytes,
+          mimeType: 'image/png',
+        );
+        if (handled) {
+          _showSnackBar('Download started in browser');
+          return;
+        }
+      }
+
       Directory? directory;
       if (Platform.isAndroid) {
         directory = await getExternalStorageDirectory();
@@ -1175,18 +1188,25 @@ class _DrawingPageState extends State<DrawingPage> {
         _showSnackBar('Nothing to save yet');
         return;
       }
+      final String fileName = _buildFileName();
       if (kIsWeb) {
-        await Share.shareXFiles(<XFile>[
-          XFile.fromData(bytes, name: _buildFileName()),
-        ]);
-      } else {
-        final String? subDirectory = Platform.isWindows ? 'videos' : null;
-        final File file = await _persistToFile(bytes, subDirectory: subDirectory);
-        if (!Platform.isWindows) {
-          await Share.shareXFiles(<XFile>[XFile(file.path)]);
+        final bool handled = await web_file_saver.triggerDownload(
+          fileName: fileName,
+          bytes: bytes,
+          mimeType: 'image/png',
+        );
+        if (handled) {
+          _showSnackBar('Download started in browser');
+          return;
         }
-        _showSnackBar('Saved to ${file.path}');
       }
+
+      final String? subDirectory = Platform.isWindows ? 'videos' : null;
+      final File file = await _persistToFile(bytes, subDirectory: subDirectory);
+      if (!Platform.isWindows) {
+        await Share.shareXFiles(<XFile>[XFile(file.path)]);
+      }
+      _showSnackBar('Saved to ${file.path}');
     } catch (error, stackTrace) {
       if (kDebugMode) {
         debugPrint('Failed to save drawing: $error\n$stackTrace');
@@ -2354,3 +2374,12 @@ class _SliderTile extends StatelessWidget {
     );
   }
 }
+
+
+
+
+
+
+
+
+

@@ -20,6 +20,15 @@ flutter run
 
 The project targets Flutter 3.22+ (Dart 3.3). Ensure `flutter_colorpicker`, `file_picker`, `path_provider`, `provider`, and `share_plus` are available in your environment.
 
+## Web Build
+
+1. Enable web support once per machine: `flutter config --enable-web`
+2. Install dependencies: `flutter pub get`
+3. Start the app in Chrome: `flutter run -d chrome`
+4. Produce a static bundle: `flutter build web`
+
+The drawing tab renders on the web build with canvas, logs, and downloads. The story authoring flow and JWT vending are desktop-only; on the web the tab shows a placeholder and auth refreshers surface a polite message. Generated images and canvas exports trigger a browser download via an inline helper, so pop-up blocking or download permissions may apply.
+
 ## Project Structure
 
 ```
@@ -56,6 +65,9 @@ flutter test
 
 ## Notes
 
-- Export on web relies on the Web Share API exposed via `share_plus`; browsers without support will surface the underlying platform error.
+- Web exports trigger a download using `lib/shared/web/file_saver.dart`; unsupported browsers will fall back to the native error snackbar.
 - The controller disposes of decoded reference images to prevent leaking native textures.
 - For production, consider persisting drawing sessions and adding richer history (multi-step clear undo, layer management) following the roadmap in the YAML document.
+
+
+
