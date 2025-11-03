@@ -19,9 +19,4 @@ class StoryController extends ChangeNotifier {
   }) async {
     return 'Story mode is unavailable on the web build.';
   }
-
-  @override
-  void dispose() {
-    super.dispose();
-  }
 }
